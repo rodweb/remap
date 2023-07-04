@@ -1,4 +1,3 @@
-
 // This is simple a mindmap app
 const map = document.getElementById('map')!;
 const notes = document.getElementById('notes')!;
@@ -8,13 +7,13 @@ if (!map || !notes) {
 }
 
 // Class for a node
-class MapNode {
+class RNode {
   name: string;
-  parent?: MapNode;
-  children: MapNode[] = []
+  parent?: RNode;
+  children: RNode[] = []
   element?: HTMLElement;
 
-  constructor(name: string, parent?: MapNode) {
+  constructor(name: string, parent?: RNode) {
     this.name = name;
     this.parent = parent;
     this.children = [];
@@ -22,26 +21,22 @@ class MapNode {
 
   // add a child to the node
   addChild(name: string) {
-    const node = new MapNode(name, this)
+    const node = new RNode(name, this)
     this.children.push(node);
     return node;
   }
 }
 
 // Initial test data
-const root = new MapNode('root');
-const node1 = root.addChild('first');
-const node2 = root.addChild('second');
-const node3 = root.addChild('third');
-const node31 = node3.addChild('third first');
-notes.innerHTML = 'Press C to add a node, ESC to go back to the parent, N to focus the next sibling, P to focus the previous sibling, D to delete the focused node, T to add some test nodes, F to search for a node';
+let root!: RNode;
 
-let focused = root;
-let selected = node1;
+let focused!: RNode; // TODO
+let selected: RNode | undefined; // TODO
 
 const keyListeners = ([
   createNode,
   createTestNodes,
+  renameNode,
   deleteNode,
   focusNextNode,
   focusParentNode,
@@ -84,9 +79,9 @@ function focusedNode(event: MouseEvent) {
   }
 }
 
-// When ESC is pressed, the focused node goes back to the parent
+// When ESC or P is pressed, the focused node goes back to the parent
 function focusParentNode(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
+  if (event.key === 'Escape' || event.key === 'p') {
     if (focused.parent) {
       focused = focused.parent;
       selectFirstChild(focused);
@@ -106,6 +101,22 @@ function createNode(event: KeyboardEvent) {
       selectNode(created);
       map.innerHTML = '';
       drawNodes();
+      app.onChange();
+    }
+  }
+}
+
+// When R is pressed, the focused node is renamed
+// An input is shown to enter the new name of the node
+function renameNode(event: KeyboardEvent) {
+  if (event.key === 'r') {
+    const target = selected ?? focused;
+    const name = prompt('Enter new name', target.name);
+    if (name && name != target.name) {
+      target.name = name;
+      map.innerHTML = '';
+      drawNodes();
+      app.onChange();
     }
   }
 }
@@ -114,6 +125,9 @@ function createNode(event: KeyboardEvent) {
 // Selecting a node means it is highlighted and the notes are updated
 function selectNextNode(event: KeyboardEvent) {
   if (event.key === 'n' || event.key === 'j') {
+    if (!selected) {
+      return;
+    }
     const index = focused.children.indexOf(selected);
     if (index === -1) {
       return;
@@ -132,6 +146,9 @@ function selectNextNode(event: KeyboardEvent) {
 // When J or K is pressed, the previous children is selected.
 function selectPreviousNode(event: KeyboardEvent) {
   if (event.key === 'p' || event.key === 'k') {
+    if (!selected) {
+      return;
+    }
     const index = focused.children.indexOf(selected);
     if (index === -1) {
       return;
@@ -150,6 +167,9 @@ function selectPreviousNode(event: KeyboardEvent) {
 // When Enter is pressed, the selected node becomes the focused node
 function focusSelectedNode(event: KeyboardEvent) {
   if (event.key === 'Enter') {
+    if (!selected) {
+      return null;
+    }
     focused = selected;
     selectFirstChild(selected);
     map.innerHTML = '';
@@ -170,7 +190,7 @@ function focusNextNode(event: KeyboardEvent) {
     const siblings = focused.parent.children;
     const index = siblings.indexOf(focused);
     focused = (index === siblings.length - 1) ? siblings[0] : siblings[index + 1];
-    selectFirstChild(selected);
+    // selectFirstChild(selected);
     map.innerHTML = '';
     drawNodes();
   }
@@ -210,19 +230,28 @@ function createTestNodes(event: KeyboardEvent) {
 function deleteNode(event: KeyboardEvent) {
   if (event.key === 'd') {
     if (focused.parent) {
+      // ask for confirmation
+      const confirm = window.confirm(`Are you sure you want to delete ${focused.name}?`);
+      if (!confirm) {
+        return;
+      }
+
       const index = focused.parent.children.indexOf(focused);
       focused.parent.children.splice(index, 1);
       focused = focused.parent;
       map.innerHTML = '';
       drawNodes();
+      app.onChange();
     } else {
       showNotification('Cannot delete root');
     }
   }
 }
 
-function selectFirstChild(node: MapNode) {
-  removeHighlight(selected);
+function selectFirstChild(node: RNode) {
+  if (selected) {
+    removeHighlight(selected);
+  }
   if (node.children.length > 0) {
     selected = node.children[0];
     highlight(selected);
@@ -293,33 +322,39 @@ function showNotification(message: string) {
 }
 
 function saveToLocalStorage() {
-  // marshall root to JSON
-  // can't stringify because of circular references
   const data = JSON.stringify(root, (key, value) => {
     if (key === 'parent') {
       return undefined;
     }
     return value;
   });
-  console.log(data)
-  /* localStorage.setItem('remap.rodweb.app', data); */
+  console.log(`Saving to local storage: ${data}`);
+  localStorage.setItem('data', data);
 }
 
 function loadFromLocalStorage() {
-  const data = localStorage.getItem('mindmap.rodweb.app');
+  const data = localStorage.getItem('data');
   if (!data) {
-    return;
+    return null;
   }
   try {
     const parsed = JSON.parse(data);
-    console.log(parsed);
+    console.log(`Reading from local storage: ${JSON.stringify(parsed, null, 2)}`);
+    return unmarshallNodes(parsed);
   } catch (error) {
     console.error(error);
     return null;
   }
 }
 
-function findNode(name: string, node: MapNode = root): MapNode | null {
+// marshall root node into a RNode
+function unmarshallNodes(root: any, parent?: RNode): RNode {
+  const node = new RNode(root.name, parent);
+  node.children = root.children.map((child: string) => unmarshallNodes(child, node));
+  return node;
+}
+
+function findNode(name: string, node: RNode = root): RNode | null {
   if (node.name === name) {
     return node;
   }
@@ -334,8 +369,8 @@ function findNode(name: string, node: MapNode = root): MapNode | null {
 }
 
 function findNodes(partialName: string) {
-  const results: MapNode[] = [];
-  function find(node: MapNode) {
+  const results: RNode[] = [];
+  function find(node: RNode) {
     if (node.name.includes(partialName)) {
       if (node !== root) {
         results.push(node);
@@ -375,25 +410,27 @@ function drawNodes() {
   });
 }
 
-function selectNode(node: MapNode) {
-  removeHighlight(selected);
+function selectNode(node: RNode) {
+  if (selected) {
+    removeHighlight(selected);
+  }
   selected = node;
   highlight(selected);
 }
 
-function removeHighlight(node: MapNode) {
+function removeHighlight(node: RNode) {
   if (node.element) {
     node.element.classList.remove('selected');
   }
 }
 
-function highlight(node: MapNode) {
+function highlight(node: RNode) {
   if (node.element) {
     node.element.classList.add('selected');
   }
 }
 
-function drawNode(node: MapNode, x?: number, y?: number) {
+function drawNode(node: RNode, x?: number, y?: number) {
   const nodeElement = document.createElement('div');
   nodeElement.classList.add('circle');
   if (node === focused) {
@@ -403,7 +440,7 @@ function drawNode(node: MapNode, x?: number, y?: number) {
     nodeElement.classList.add('selected');
   }
   nodeElement.innerHTML = node.name;
-  if (!x || !y) {
+  if (x && y) {
     nodeElement.style.left = x + 'px';
     nodeElement.style.top = y + 'px';
   }
@@ -427,10 +464,41 @@ function drawLine(from: { x: number, y: number }, to: { x: number, y: number }, 
   map.appendChild(lineElement);
 }
 
-function init() {
-  drawNodes();
-  registerListeners();
+class MapSection {
+  el: HTMLElement;
+  constructor() {
+    this.el = document.getElementById('map')!;
+  }
 }
 
-init();
+class NotesSection {
+  el: HTMLElement;
+  constructor() {
+    this.el = document.getElementById('notes')!;
+  }
 
+  updateNotes(notes: string) {
+    this.el.innerHTML = notes;
+  }
+}
+
+class App {
+  map = new MapSection();
+  notes = new NotesSection();
+
+  init() {
+    root = loadFromLocalStorage() ?? new RNode('root');
+    focused = root;
+    selected = root.children[0];
+    drawNodes();
+    registerListeners();
+    this.notes.updateNotes('Press C to add a node, ESC to go back to the parent, N to focus the next sibling, P to focus the previous sibling, D to delete the focused node, T to add some test nodes, F to search for a node');
+  }
+
+  onChange() {
+    saveToLocalStorage();
+  }
+}
+
+const app = new App();
+app.init();
